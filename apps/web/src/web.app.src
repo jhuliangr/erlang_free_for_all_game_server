@@ -1,0 +1,8 @@
+{application, web, [
+  {description, "Game web interface"},
+  {vsn, "0.1.0"},
+  {registered, []},
+  {mod, {web_app, []}},
+  {applications, [kernel, stdlib, cowboy, jsx, lager, core]},
+  {env, []}
+]}.
