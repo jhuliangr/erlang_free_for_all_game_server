@@ -87,9 +87,6 @@ send_state_update(Player, AllPlayers) ->
             Py = player:y(Player),
             Nearby = lists:filter(
                 fun(Other) ->
-                    OtherId = player:id(Other),
-                    PlayerId = player:id(Player),
-                    OtherId =/= PlayerId andalso
                     distance_sq(Px, Py, player:x(Other), player:y(Other)) =<
                         ?NEARBY_RADIUS * ?NEARBY_RADIUS
                 end,
