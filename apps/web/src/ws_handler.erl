@@ -14,8 +14,16 @@
 %%%
 %%% Outgoing message types:
 %%%   welcome       – {"type":"welcome","playerId":"..."}
-%%%   state_update  – {"type":"state_update","players":[...]}
+%%%   state_update  – {"type":"state_update","players":[...diffs...],"removed":[...ids...]}
 %%%   combat_event  – {"type":"combat_event","attackerId":"...","defenderId":"...","damage":10}
+%%%
+%%% state_update diff protocol:
+%%%   Each entry in "players" always contains "id". For a player seen
+%%%   for the first time (or after re-entering range) all fields are
+%%%   included. On subsequent ticks only fields whose value changed
+%%%   since the last sent state are included.
+%%%   "removed" lists IDs of players that were visible last tick but
+%%%   are no longer within the nearby radius.
 %%% @end
 %%%-------------------------------------------------------------------
 -module(ws_handler).
@@ -26,7 +34,8 @@
          websocket_info/2, terminate/3]).
 
 -record(state, {
-    player_id :: binary() | undefined
+    player_id    :: binary() | undefined,
+    player_cache :: map()               %% PlayerId => last-sent player map
 }).
 
 %%--------------------------------------------------------------------
@@ -34,7 +43,8 @@
 %% @end
 %%--------------------------------------------------------------------
 init(Req, _Opts) ->
-    {cowboy_websocket, Req, #state{player_id = undefined},
+    {cowboy_websocket, Req,
+     #state{player_id = undefined, player_cache = #{}},
      #{idle_timeout => 60000}}.
 
 %%--------------------------------------------------------------------
@@ -67,9 +77,20 @@ websocket_handle(_Frame, State) ->
 %% @doc Handle Erlang messages sent to this process.
 %% @end
 %%--------------------------------------------------------------------
-websocket_info({state_update, Players}, State) ->
-    Msg = jsx:encode(#{type => <<"state_update">>, players => Players}),
-    {reply, {text, Msg}, State};
+websocket_info({state_update, Players}, #state{player_cache = Cache} = State) ->
+    Diffs = [diff_player(P, maps:get(maps:get(id, P), Cache, undefined)) || P <- Players],
+
+    CurrentIds = [maps:get(id, P) || P <- Players],
+    Removed = [Id || Id <- maps:keys(Cache), not lists:member(Id, CurrentIds)],
+
+    NewCache = maps:from_list([{maps:get(id, P), P} || P <- Players]),
+
+    Msg = jsx:encode(#{
+        type    => <<"state_update">>,
+        players => Diffs,
+        removed => Removed
+    }),
+    {reply, {text, Msg}, State#state{player_cache = NewCache}};
 
 websocket_info({send, Msg}, State) ->
     {reply, {text, Msg}, State};
@@ -96,7 +117,6 @@ terminate(_Reason, _Req, #state{player_id = PlayerId}) ->
 handle_message(#{<<"type">> := <<"join">>, <<"name">> := Name}, State) ->
     PlayerId = base64:encode(crypto:strong_rand_bytes(8)),
     {ok, Player} = player_use_cases:join_game(PlayerId, Name),
-    %% Register this pid with the registry and broadcaster
     player_registry:update_player(PlayerId,
         player:set_pid(Player, self())),
     web_broadcaster:register_ws(PlayerId, self()),
@@ -106,7 +126,7 @@ handle_message(#{<<"type">> := <<"join">>, <<"name">> := Name}, State) ->
         player   => player:to_map(player:set_pid(Player, self()))
     }),
     lager:info("Player ~s joined as ~s", [PlayerId, Name]),
-    {reply, {text, Welcome}, State#state{player_id = PlayerId}};
+    {reply, {text, Welcome}, State#state{player_id = PlayerId, player_cache = #{}}};
 
 handle_message(#{<<"type">> := <<"move">>, <<"dx">> := Dx, <<"dy">> := Dy},
                #state{player_id = PlayerId} = State)
@@ -152,6 +172,29 @@ handle_message(#{<<"type">> := <<"equip">>,
 handle_message(_Unknown, State) ->
     ErrorReply = jsx:encode(#{type => <<"error">>, reason => <<"unknown_message_type">>}),
     {reply, {text, ErrorReply}, State}.
+
+%%--------------------------------------------------------------------
+%% Internal: build a diff map.
+%%
+%% Returns the full map when the player is new (Old = undefined).
+%% Otherwise returns a map with only `id` plus the fields whose
+%% value differs from the previously sent state.
+%%--------------------------------------------------------------------
+
+-spec diff_player(map(), map() | undefined) -> map().
+diff_player(New, undefined) ->
+    New;
+diff_player(New, Old) ->
+    maps:fold(
+        fun(K, V, Acc) ->
+            case maps:get(K, Old, undefined) of
+                V -> Acc;           
+                _ -> Acc#{K => V}  
+            end
+        end,
+        #{id => maps:get(id, New)},
+        New
+    ).
 
 %%--------------------------------------------------------------------
 %% Broadcast combat events to all involved parties
