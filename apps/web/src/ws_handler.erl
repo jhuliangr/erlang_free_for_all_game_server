@@ -45,7 +45,7 @@
 init(Req, _Opts) ->
     {cowboy_websocket, Req,
      #state{player_id = undefined, player_cache = #{}},
-     #{idle_timeout => 60000}}.
+     #{idle_timeout => 60000, compress => true}}.
 
 %%--------------------------------------------------------------------
 %% @doc WebSocket handshake complete.
