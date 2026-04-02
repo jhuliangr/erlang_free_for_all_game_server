@@ -105,25 +105,52 @@ websocket_info(_Info, State) ->
 terminate(_Reason, _Req, #state{player_id = undefined}) ->
     ok;
 terminate(_Reason, _Req, #state{player_id = PlayerId}) ->
-    web_broadcaster:unregister_ws(PlayerId),
-    player_use_cases:leave_game(PlayerId),
-    lager:info("WebSocket terminated for player ~s", [PlayerId]),
+    %% Only clean up if this process is still the active connection.
+    %% A reconnect may have already replaced us with a new WS pid.
+    case player_registry:get_player(PlayerId) of
+        {ok, Player} ->
+            case player:pid(Player) =:= self() of
+                true ->
+                    web_broadcaster:unregister_ws(PlayerId),
+                    player_use_cases:leave_game(PlayerId),
+                    lager:info("WebSocket terminated for player ~s", [PlayerId]);
+                false ->
+                    lager:info("Stale WebSocket closed for player ~s (reconnected)", [PlayerId])
+            end;
+        {error, not_found} ->
+            ok
+    end,
     ok.
 
 %%--------------------------------------------------------------------
 %% Internal: dispatch decoded JSON messages
 %%--------------------------------------------------------------------
 
-handle_message(#{<<"type">> := <<"join">>, <<"name">> := Name}, State) ->
-    PlayerId = base64:encode(crypto:strong_rand_bytes(8)),
-    {ok, Player} = player_use_cases:join_game(PlayerId, Name),
-    player_registry:update_player(PlayerId,
-        player:set_pid(Player, self())),
+handle_message(#{<<"type">> := <<"join">>, <<"name">> := Name} = Msg, State) ->
+    RequestedId = maps:get(<<"playerId">>, Msg, undefined),
+    {PlayerId, Player} = case RequestedId of
+        undefined ->
+            NewId = base64:encode(crypto:strong_rand_bytes(8)),
+            {ok, P} = player_use_cases:join_game(NewId, Name),
+            {NewId, P};
+        _ ->
+            case player_registry:get_player(RequestedId) of
+                {ok, Existing} ->
+                    lager:info("Player ~s reconnecting", [RequestedId]),
+                    {RequestedId, Existing};
+                {error, not_found} ->
+                    NewId = base64:encode(crypto:strong_rand_bytes(8)),
+                    {ok, P} = player_use_cases:join_game(NewId, Name),
+                    {NewId, P}
+            end
+    end,
+    Updated = player:set_pid(Player, self()),
+    player_registry:update_player(PlayerId, Updated),
     web_broadcaster:register_ws(PlayerId, self()),
     Welcome = jsx:encode(#{
         type     => <<"welcome">>,
         playerId => PlayerId,
-        player   => player:to_map(player:set_pid(Player, self()))
+        player   => player:to_map(Updated)
     }),
     lager:info("Player ~s joined as ~s", [PlayerId, Name]),
     {reply, {text, Welcome}, State#state{player_id = PlayerId, player_cache = #{}}};
