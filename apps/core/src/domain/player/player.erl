@@ -37,8 +37,9 @@
     max_hp   :: float(),
     level    :: pos_integer(),
     xp       :: float(),
-    skin     :: binary(),
-    weapon   :: binary()
+    skin      :: binary(),
+    weapon    :: binary(),
+    character :: binary()
 }).
 
 -type player() :: #player{}.
@@ -61,8 +62,9 @@ new(Id, Name) ->
         max_hp = 100.0,
         level  = 1,
         xp     = 0.0,
-        skin   = <<"default">>,
-        weapon = <<"sword">>
+        skin      = <<"default">>,
+        weapon    = <<"sword">>,
+        character = <<"knight">>
     }.
 
 %%--------------------------------------------------------------------
@@ -123,11 +125,17 @@ gain_xp(Player, Xp) ->
 %% @doc Equip a cosmetic item in the given slot (skin or weapon).
 %% @end
 %%--------------------------------------------------------------------
--spec equip(player(), skin | weapon, binary()) -> player().
+-spec equip(player(), skin | weapon | character, binary()) -> player().
 equip(Player, skin, ItemId) ->
     Player#player{skin = ItemId};
 equip(Player, weapon, ItemId) ->
-    Player#player{weapon = ItemId}.
+    Player#player{weapon = ItemId};
+equip(Player, character, ItemId) ->
+    Valid = [<<"mage">>, <<"knight">>, <<"rogue">>, <<"golem">>],
+    case lists:member(ItemId, Valid) of
+        true  -> Player#player{character = ItemId};
+        false -> Player
+    end.
 
 %%--------------------------------------------------------------------
 %% @doc Serialize the player to a map for JSON encoding.
@@ -144,8 +152,9 @@ to_map(Player) ->
         max_hp => Player#player.max_hp,
         level  => Player#player.level,
         xp     => Player#player.xp,
-        skin   => Player#player.skin,
-        weapon => Player#player.weapon
+        skin      => Player#player.skin,
+        weapon    => Player#player.weapon,
+        character => Player#player.character
     }.
 
 %%--------------------------------------------------------------------

@@ -28,6 +28,8 @@ player_test_() ->
          {"gain_xp multi-level up",                 fun test_gain_xp_multi_level/0},
          {"equip skin updates skin",                fun test_equip_skin/0},
          {"equip weapon updates weapon",            fun test_equip_weapon/0},
+         {"equip character updates character",      fun test_equip_character/0},
+         {"equip invalid character is ignored",     fun test_equip_invalid_character/0},
          {"to_map serializes all fields",           fun test_to_map/0},
          {"set_position clamps to world bounds",    fun test_set_position/0}
      ]}.
@@ -120,6 +122,18 @@ test_equip_weapon() ->
     Map = player:to_map(P1),
     ?assertEqual(<<"sword_legendary">>, maps:get(weapon, Map)).
 
+test_equip_character() ->
+    P0 = player:new(<<"p13">>, <<"Mia">>),
+    P1 = player:equip(P0, character, <<"mage">>),
+    Map = player:to_map(P1),
+    ?assertEqual(<<"mage">>, maps:get(character, Map)).
+
+test_equip_invalid_character() ->
+    P0 = player:new(<<"p14">>, <<"Nate">>),
+    P1 = player:equip(P0, character, <<"dragon">>),
+    Map = player:to_map(P1),
+    ?assertEqual(<<"knight">>, maps:get(character, Map)).
+
 test_to_map() ->
     P0 = player:new(<<"p11">>, <<"Kim">>),
     Map = player:to_map(P0),
@@ -132,8 +146,9 @@ test_to_map() ->
     ?assert(maps:is_key(max_hp, Map)),
     ?assert(maps:is_key(level,  Map)),
     ?assert(maps:is_key(xp,     Map)),
-    ?assert(maps:is_key(skin,   Map)),
-    ?assert(maps:is_key(weapon, Map)).
+    ?assert(maps:is_key(skin,      Map)),
+    ?assert(maps:is_key(weapon,    Map)),
+    ?assert(maps:is_key(character, Map)).
 
 test_set_position() ->
     P0 = player:new(<<"p12">>, <<"Leo">>),

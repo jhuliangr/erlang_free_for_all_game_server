@@ -162,9 +162,10 @@ handle_message(#{<<"type">> := <<"equip">>,
                #state{player_id = PlayerId} = State)
   when PlayerId =/= undefined ->
     Slot = case SlotBin of
-        <<"skin">>   -> skin;
-        <<"weapon">> -> weapon;
-        _            -> skin
+        <<"skin">>      -> skin;
+        <<"weapon">>    -> weapon;
+        <<"character">> -> character;
+        _               -> skin
     end,
     player_use_cases:equip_cosmetic(PlayerId, Slot, ItemId),
     {ok, State};

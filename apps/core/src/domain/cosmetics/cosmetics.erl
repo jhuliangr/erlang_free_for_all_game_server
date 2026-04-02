@@ -37,6 +37,12 @@ default_config() ->
               name => <<"Legendary Sword">>,
               unlockCondition => #{type => <<"kills">>, value => 50}}
         ],
+        characters => [
+            #{id => <<"mage">>,   name => <<"Mage">>},
+            #{id => <<"knight">>, name => <<"Knight">>},
+            #{id => <<"rogue">>,  name => <<"Rogue">>},
+            #{id => <<"golem">>,  name => <<"Golem">>}
+        ],
         achievements => [
             #{id => <<"first_blood">>,
               name => <<"First Blood">>,

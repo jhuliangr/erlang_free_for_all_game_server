@@ -45,7 +45,7 @@ leave_game(PlayerId) ->
 %% Slot must be the atom `skin` or `weapon`.
 %% @end
 %%--------------------------------------------------------------------
--spec equip_cosmetic(binary(), skin | weapon, binary()) -> ok | {error, not_found}.
+-spec equip_cosmetic(binary(), skin | weapon | character, binary()) -> ok | {error, not_found}.
 equip_cosmetic(PlayerId, Slot, ItemId) ->
     case player_registry:get_player(PlayerId) of
         {ok, Player} ->
