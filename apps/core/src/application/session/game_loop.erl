@@ -19,9 +19,12 @@
 
 -define(TICK_MS, 50).
 -define(NEARBY_RADIUS, 500.0).
+-define(DOT_CHECK_INTERVAL, 1000).  %% Process DoTs every 1 second
 -define(SERVER, ?MODULE).
 
--record(state, {}).
+-record(state, {
+    last_dot_tick :: integer()
+}).
 
 %%--------------------------------------------------------------------
 %% Public API
@@ -42,7 +45,7 @@ stop() ->
 init([]) ->
     lager:info("Game loop starting, tick=~pms", [?TICK_MS]),
     schedule_tick(),
-    {ok, #state{}}.
+    {ok, #state{last_dot_tick = erlang:system_time(millisecond)}}.
 
 handle_call(_Request, _From, State) ->
     {reply, {error, unknown_call}, State}.
@@ -52,8 +55,16 @@ handle_cast(_Msg, State) ->
 
 handle_info(tick, State) ->
     tick(),
+    Now = erlang:system_time(millisecond),
+    NewState = case Now - State#state.last_dot_tick >= ?DOT_CHECK_INTERVAL of
+        true ->
+            process_dots(),
+            State#state{last_dot_tick = Now};
+        false ->
+            State
+    end,
     schedule_tick(),
-    {noreply, State};
+    {noreply, NewState};
 handle_info(_Info, State) ->
     {noreply, State}.
 
@@ -102,3 +113,40 @@ distance_sq(X1, Y1, X2, Y2) ->
     Dx = X2 - X1,
     Dy = Y2 - Y1,
     Dx * Dx + Dy * Dy.
+
+%%--------------------------------------------------------------------
+%% @doc Process DoT effects on all players. Applies accumulated
+%% damage, broadcasts damage events, and handles DoT kills.
+%% @end
+%%--------------------------------------------------------------------
+-spec process_dots() -> ok.
+process_dots() ->
+    Players = player_registry:all_players(),
+    lists:foreach(fun process_player_dots/1, Players).
+
+-spec process_player_dots(player:player()) -> ok.
+process_player_dots(Player) ->
+    {Updated, DotDmg} = player:tick_dots(Player),
+    case DotDmg > 0.0 of
+        true ->
+            PlayerId = player:id(Updated),
+            player_registry:update_player(PlayerId, Updated),
+            %% Broadcast DoT damage as a combat event
+            Event = jsx:encode(#{
+                type       => <<"combat_event">>,
+                attackerId => <<"dot">>,
+                defenderId => PlayerId,
+                damage     => DotDmg
+            }),
+            web_broadcaster:broadcast(Event),
+            %% Handle DoT kill
+            case player:hp(Updated) =< +0.0 of
+                true ->
+                    Dead = player:add_death(Updated),
+                    player_registry:update_player(PlayerId, Dead);
+                false ->
+                    ok
+            end;
+        false ->
+            ok
+    end.

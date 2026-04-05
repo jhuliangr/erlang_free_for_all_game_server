@@ -1,0 +1,20 @@
+[
+  {lager, [
+    {handlers, [
+      {lager_console_backend, [{level, info}]}
+    ]}
+  ]},
+  {web, [
+    {port, 3000}
+  ]},
+  {core, [
+    {db, [
+      {host, "your-host-url.com"},
+      {port, 3001},
+      {username, "database-username"},
+      {password, "really-secure-password"},
+      {database, "postgres"},
+      {ssl, true}
+    ]}
+  ]}
+].

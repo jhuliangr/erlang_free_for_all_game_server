@@ -174,10 +174,17 @@ handle_message(#{<<"type">> := <<"attack">>, <<"angle">> := Angle},
   when PlayerId =/= undefined ->
     case player_registry:get_player(PlayerId) of
         {ok, Attacker} ->
+            Range = character_stats:attack_range(player:character(Attacker)),
             NearbyIds = spatial_index:query_nearby(
-                player:x(Attacker), player:y(Attacker), 150.0),
-            {ok, Hits} = process_attack:execute(PlayerId, float(Angle), NearbyIds),
-            broadcast_combat_events(PlayerId, Hits);
+                player:x(Attacker), player:y(Attacker), Range),
+            case process_attack:execute(PlayerId, float(Angle), NearbyIds) of
+                {ok, Hits} ->
+                    broadcast_combat_events(PlayerId, Hits);
+                {error, cooldown} ->
+                    ok;
+                {error, _} ->
+                    ok
+            end;
         {error, not_found} ->
             ok
     end,

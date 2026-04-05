@@ -2,6 +2,6 @@
   {description, "Game core domain"},
   {vsn, "0.1.0"},
   {registered, []},
-  {applications, [kernel, stdlib, lager, jsx]},
+  {applications, [kernel, stdlib, lager, jsx, epgsql]},
   {env, []}
 ]}.

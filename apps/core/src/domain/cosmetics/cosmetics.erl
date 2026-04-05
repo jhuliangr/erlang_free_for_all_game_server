@@ -38,10 +38,10 @@ default_config() ->
               unlockCondition => #{type => <<"kills">>, value => 50}}
         ],
         characters => [
-            #{id => <<"mage">>,   name => <<"Mage">>},
-            #{id => <<"knight">>, name => <<"Knight">>},
-            #{id => <<"rogue">>,  name => <<"Rogue">>},
-            #{id => <<"golem">>,  name => <<"Golem">>}
+            #{id => <<"mage">>,   name => <<"Mage">>,   stats => character_stats:get(<<"mage">>)},
+            #{id => <<"knight">>, name => <<"Knight">>, stats => character_stats:get(<<"knight">>)},
+            #{id => <<"rogue">>,  name => <<"Rogue">>,  stats => character_stats:get(<<"rogue">>)},
+            #{id => <<"golem">>,  name => <<"Golem">>,  stats => character_stats:get(<<"golem">>)}
         ],
         achievements => [
             #{id => <<"first_blood">>,

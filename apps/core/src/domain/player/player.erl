@@ -14,6 +14,12 @@
     take_damage/2,
     gain_xp/2,
     equip/3,
+    add_kill/1,
+    add_death/1,
+    add_dot/3,
+    tick_dots/1,
+    can_attack/1,
+    record_attack/1,
     to_map/1,
     id/1,
     pid/1,
@@ -24,23 +30,36 @@
     level/1,
     xp/1,
     name/1,
+    character/1,
+    kills/1,
+    deaths/1,
     xp_for_level/1
 ]).
 
 -record(player, {
-    id       :: binary(),
-    name     :: binary(),
-    pid      :: pid() | undefined,
-    x        :: float(),
-    y        :: float(),
-    hp       :: float(),
-    max_hp   :: float(),
-    level    :: pos_integer(),
-    xp       :: float(),
-    skin      :: binary(),
-    weapon    :: binary(),
-    character :: binary()
+    id             :: binary(),
+    name           :: binary(),
+    pid            :: pid() | undefined,
+    x              :: float(),
+    y              :: float(),
+    hp             :: float(),
+    max_hp         :: float(),
+    level          :: pos_integer(),
+    xp             :: float(),
+    kills          :: non_neg_integer(),
+    deaths         :: non_neg_integer(),
+    last_attack_at :: integer(),
+    dot_effects    :: [dot_effect()],
+    skin           :: binary(),
+    weapon         :: binary(),
+    character      :: binary()
 }).
+
+-type dot_effect() :: #{
+    damage_per_sec := float(),
+    ticks_left     := non_neg_integer(),
+    last_tick_at   := integer()
+}.
 
 -type player() :: #player{}.
 -export_type([player/0]).
@@ -51,20 +70,26 @@
 %%--------------------------------------------------------------------
 -spec new(binary(), binary()) -> player().
 new(Id, Name) ->
+    Char = <<"knight">>,
+    Hp = character_stats:base_hp(Char),
     {SpawnX, SpawnY} = world:spawn_point(),
     #player{
-        id     = Id,
-        name   = Name,
-        pid    = undefined,
-        x      = SpawnX,
-        y      = SpawnY,
-        hp     = 100.0,
-        max_hp = 100.0,
-        level  = 1,
-        xp     = 0.0,
-        skin      = <<"default">>,
-        weapon    = <<"sword">>,
-        character = <<"knight">>
+        id             = Id,
+        name           = Name,
+        pid            = undefined,
+        x              = SpawnX,
+        y              = SpawnY,
+        hp             = Hp,
+        max_hp         = Hp,
+        level          = 1,
+        xp             = 0.0,
+        kills          = 0,
+        deaths         = 0,
+        last_attack_at = 0,
+        dot_effects    = [],
+        skin           = <<"default">>,
+        weapon         = <<"sword">>,
+        character      = Char
     }.
 
 %%--------------------------------------------------------------------
@@ -133,8 +158,12 @@ equip(Player, weapon, ItemId) ->
 equip(Player, character, ItemId) ->
     Valid = [<<"mage">>, <<"knight">>, <<"rogue">>, <<"golem">>],
     case lists:member(ItemId, Valid) of
-        true  -> Player#player{character = ItemId};
-        false -> Player
+        true ->
+            NewMaxHp = character_stats:base_hp(ItemId),
+            NewHp = min(Player#player.hp, NewMaxHp),
+            Player#player{character = ItemId, max_hp = NewMaxHp, hp = NewHp};
+        false ->
+            Player
     end.
 
 %%--------------------------------------------------------------------
@@ -152,6 +181,8 @@ to_map(Player) ->
         max_hp => Player#player.max_hp,
         level  => Player#player.level,
         xp     => Player#player.xp,
+        kills  => Player#player.kills,
+        deaths => Player#player.deaths,
         skin      => Player#player.skin,
         weapon    => Player#player.weapon,
         character => Player#player.character
@@ -187,6 +218,94 @@ xp(#player{xp = Xp}) -> Xp.
 
 -spec name(player()) -> binary().
 name(#player{name = Name}) -> Name.
+
+-spec character(player()) -> binary().
+character(#player{character = C}) -> C.
+
+-spec kills(player()) -> non_neg_integer().
+kills(#player{kills = K}) -> K.
+
+-spec deaths(player()) -> non_neg_integer().
+deaths(#player{deaths = D}) -> D.
+
+-spec add_kill(player()) -> player().
+add_kill(Player) -> Player#player{kills = Player#player.kills + 1}.
+
+-spec add_death(player()) -> player().
+add_death(Player) -> Player#player{deaths = Player#player.deaths + 1}.
+
+%%--------------------------------------------------------------------
+%% @doc Check if the player's attack cooldown has elapsed.
+%% @end
+%%--------------------------------------------------------------------
+-spec can_attack(player()) -> boolean().
+can_attack(Player) ->
+    Cooldown = character_stats:cooldown_ms(Player#player.character),
+    case Cooldown of
+        0 -> true;
+        _ ->
+            Now = erlang:system_time(millisecond),
+            Now - Player#player.last_attack_at >= Cooldown
+    end.
+
+%%--------------------------------------------------------------------
+%% @doc Record that the player just attacked (updates cooldown timer).
+%% @end
+%%--------------------------------------------------------------------
+-spec record_attack(player()) -> player().
+record_attack(Player) ->
+    Player#player{last_attack_at = erlang:system_time(millisecond)}.
+
+%%--------------------------------------------------------------------
+%% @doc Apply a new DoT effect to this player.
+%% @end
+%%--------------------------------------------------------------------
+-spec add_dot(player(), float(), non_neg_integer()) -> player().
+add_dot(Player, DamagePerSec, DurationSec) ->
+    Now = erlang:system_time(millisecond),
+    Dot = #{damage_per_sec => DamagePerSec,
+            ticks_left     => DurationSec,
+            last_tick_at   => Now},
+    Player#player{dot_effects = [Dot | Player#player.dot_effects]}.
+
+%%--------------------------------------------------------------------
+%% @doc Process all active DoT effects. Called once per second.
+%%
+%% Returns `{UpdatedPlayer, TotalDotDamage}` where TotalDotDamage
+%% is the sum of damage applied this tick (for combat event broadcast).
+%% @end
+%%--------------------------------------------------------------------
+-spec tick_dots(player()) -> {player(), float()}.
+tick_dots(#player{dot_effects = []} = Player) ->
+    {Player, 0.0};
+tick_dots(Player) ->
+    Now = erlang:system_time(millisecond),
+    {NewDots, TotalDmg} = lists:foldl(
+        fun(#{damage_per_sec := Dps, ticks_left := Left, last_tick_at := LastAt} = Dot,
+            {DotsAcc, DmgAcc}) ->
+            Elapsed = Now - LastAt,
+            case Elapsed >= 1000 andalso Left > 0 of
+                true ->
+                    Remaining = Left - 1,
+                    NewDot = Dot#{ticks_left := Remaining, last_tick_at := Now},
+                    case Remaining > 0 of
+                        true  -> {[NewDot | DotsAcc], DmgAcc + Dps};
+                        false -> {DotsAcc, DmgAcc + Dps}
+                    end;
+                false when Left > 0 ->
+                    {[Dot | DotsAcc], DmgAcc};
+                false ->
+                    {DotsAcc, DmgAcc}
+            end
+        end,
+        {[], 0.0},
+        Player#player.dot_effects
+    ),
+    Damaged = case TotalDmg > 0.0 of
+        true  -> take_damage(Player, TotalDmg);
+        false -> Player
+    end,
+    {Damaged#player{dot_effects = NewDots}, TotalDmg}.
 
 %%--------------------------------------------------------------------
 %% @doc XP required to reach the given level.

@@ -34,6 +34,13 @@ join_game(PlayerId, Name) ->
 %%--------------------------------------------------------------------
 -spec leave_game(binary()) -> ok.
 leave_game(PlayerId) ->
+    %% Save session stats to leaderboard before removing
+    case player_registry:get_player(PlayerId) of
+        {ok, Player} ->
+            leaderboard_use_cases:record_session(Player);
+        {error, not_found} ->
+            ok
+    end,
     player_registry:unregister(PlayerId),
     spatial_index:remove(PlayerId),
     lager:info("Player left: ~s", [PlayerId]),

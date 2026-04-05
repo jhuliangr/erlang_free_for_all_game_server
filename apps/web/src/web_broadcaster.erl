@@ -91,7 +91,30 @@ handle_cast(_Msg, State) ->
     {noreply, State}.
 
 handle_info({'DOWN', _Ref, process, Pid, _Reason}, State) ->
-    %% Clean up when a WebSocket process dies
+    %% Clean up when a WebSocket process dies unexpectedly.
+    %% Besides removing from broadcaster, also remove the player from
+    %% the registry and spatial index so it doesn't linger on the map.
+    lists:foreach(
+        fun({PlayerId, P}) when P =:= Pid ->
+                %% Only clean up if this PID is still the active connection
+                %% (a reconnect may have already replaced it).
+                case player_registry:get_player(PlayerId) of
+                    {ok, Player} ->
+                        case player:pid(Player) =:= Pid of
+                            true ->
+                                player_use_cases:leave_game(PlayerId),
+                                lager:info("Cleaned up disconnected player ~s", [PlayerId]);
+                            false ->
+                                ok  %% Already reconnected with a new WS process
+                        end;
+                    {error, not_found} ->
+                        ok
+                end;
+           ({_PlayerId, _OtherPid}) ->
+                ok
+        end,
+        State#state.clients
+    ),
     Clients = lists:filter(fun({_Id, P}) -> P =/= Pid end, State#state.clients),
     {noreply, State#state{clients = Clients}};
 

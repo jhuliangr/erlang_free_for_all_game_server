@@ -21,8 +21,9 @@ start(_StartType, _StartArgs) ->
 
     Dispatch = cowboy_router:compile([
         {'_', [
-            {"/api/config", config_handler, []},
-            {"/ws",         ws_handler,     []}
+            {"/api/config",      config_handler,      []},
+            {"/api/leaderboard", leaderboard_handler,  []},
+            {"/ws",              ws_handler,           []}
         ]}
     ]),
 
@@ -33,7 +34,17 @@ start(_StartType, _StartArgs) ->
     ),
     lager:info("Cowboy listening on port ~p", [Port]),
 
-    web_sup:start_link().
+    {ok, Pid} = web_sup:start_link(),
+
+    %% Run database migrations after supervisor starts (db gen_server is up)
+    case leaderboard_repo:create_table() of
+        ok ->
+            lager:info("Leaderboard table ready");
+        {error, MigErr} ->
+            lager:warning("Leaderboard migration failed: ~p (leaderboard will be unavailable)", [MigErr])
+    end,
+
+    {ok, Pid}.
 
 %%--------------------------------------------------------------------
 %% @doc Stop the web application.

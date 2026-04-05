@@ -35,6 +35,7 @@ init([]) ->
     },
 
     Children = [
+        child_spec(db,              db,              start_link, []),
         child_spec(player_registry, player_registry, start_link, []),
         child_spec(spatial_index,   spatial_index,   start_link, []),
         child_spec(web_broadcaster, web_broadcaster, start_link, []),

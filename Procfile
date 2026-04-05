@@ -1,1 +1,0 @@
-web: _build/default/rel/game_server/bin/game_server foreground
