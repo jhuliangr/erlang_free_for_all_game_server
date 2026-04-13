@@ -52,8 +52,8 @@ get(<<"mage">>) ->
         base_damage        => 0.0,      %% no instant damage
         attack_range       => 200.0,
         knockback_distance => 30.0,
-        cooldown_ms        => 1000,     %% 1 attack/sec
-        dot                => #{damage_per_sec => 1.0, duration_sec => 5}
+        cooldown_ms        => 1000,     %% 3 attack/sec
+        dot                => #{damage_per_sec => 3.0, duration_sec => 5}
     };
 get(<<"rogue">>) ->
     #{
