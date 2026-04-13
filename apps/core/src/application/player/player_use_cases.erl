@@ -10,6 +10,7 @@
 
 -export([
     join_game/2,
+    join_game/3,
     leave_game/1,
     equip_cosmetic/3
 ]).
@@ -22,10 +23,14 @@
 %%--------------------------------------------------------------------
 -spec join_game(binary(), binary()) -> {ok, player:player()}.
 join_game(PlayerId, Name) ->
-    Player = player:new(PlayerId, Name),
+    join_game(PlayerId, Name, <<"knight">>).
+
+-spec join_game(binary(), binary(), binary()) -> {ok, player:player()}.
+join_game(PlayerId, Name, Character) ->
+    Player = player:new(PlayerId, Name, Character),
     player_registry:register(Player, undefined),
     spatial_index:insert(PlayerId, player:x(Player), player:y(Player)),
-    lager:info("Player joined: ~s (~s)", [PlayerId, Name]),
+    lager:info("Player joined: ~s (~s) as ~s", [PlayerId, Name, Character]),
     {ok, Player}.
 
 %%--------------------------------------------------------------------
