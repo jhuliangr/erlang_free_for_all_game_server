@@ -9,6 +9,7 @@
 
 -export([
     new/2,
+    new/3,
     move/3,
     set_position/3,
     take_damage/2,
@@ -70,7 +71,10 @@
 %%--------------------------------------------------------------------
 -spec new(binary(), binary()) -> player().
 new(Id, Name) ->
-    Char = <<"knight">>,
+    new(Id, Name, <<"knight">>).
+
+-spec new(binary(), binary(), binary()) -> player().
+new(Id, Name, Char) ->
     Hp = character_stats:base_hp(Char),
     {SpawnX, SpawnY} = world:spawn_point(),
     #player{
