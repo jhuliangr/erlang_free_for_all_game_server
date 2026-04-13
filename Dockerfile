@@ -10,8 +10,8 @@ COPY . /app
 # Install any needed packages specified in rebar.config
 RUN rebar3 compile
 
-# Make port 8080 available to the world outside this container
-EXPOSE 8080
+# Make port 8200 available to the world outside this container
+EXPOSE 8200
 
 # Run the application
 CMD erl -pa _build/default/lib/*/ebin \
