@@ -128,19 +128,21 @@ terminate(_Reason, _Req, #state{player_id = PlayerId}) ->
 
 handle_message(#{<<"type">> := <<"join">>, <<"name">> := Name} = Msg, State) ->
     RequestedId = maps:get(<<"playerId">>, Msg, undefined),
+    CharacterId = maps:get(<<"character">>, Msg, <<"knight">>),
     {PlayerId, Player} = case RequestedId of
         undefined ->
             NewId = base64:encode(crypto:strong_rand_bytes(8)),
-            {ok, P} = player_use_cases:join_game(NewId, Name),
+            {ok, P} = player_use_cases:join_game(NewId, Name, CharacterId),
             {NewId, P};
         _ ->
             case player_registry:get_player(RequestedId) of
                 {ok, Existing} ->
                     lager:info("Player ~s reconnecting", [RequestedId]),
-                    {RequestedId, Existing};
+                    Reconnected = player:equip(Existing, character, CharacterId),
+                    {RequestedId, Reconnected};
                 {error, not_found} ->
                     NewId = base64:encode(crypto:strong_rand_bytes(8)),
-                    {ok, P} = player_use_cases:join_game(NewId, Name),
+                    {ok, P} = player_use_cases:join_game(NewId, Name, CharacterId),
                     {NewId, P}
             end
     end,
