@@ -32,6 +32,7 @@ init(Req0, State) ->
             {ok, Req, State};
         <<"GET">> ->
             Limit = parse_limit(Req0),
+            Headers = ?CORS_HEADERS,
             case leaderboard_use_cases:get_top(Limit) of
                 {ok, Entries} ->
                     Body = jsx:encode(#{
@@ -40,7 +41,7 @@ init(Req0, State) ->
                     }),
                     Req = cowboy_req:reply(
                         200,
-                        ?CORS_HEADERS#{<<"content-type">> => <<"application/json">>},
+                        Headers#{<<"content-type">> => <<"application/json">>},
                         Body,
                         Req0
                     ),
@@ -53,7 +54,7 @@ init(Req0, State) ->
                     }),
                     Req = cowboy_req:reply(
                         500,
-                        ?CORS_HEADERS#{<<"content-type">> => <<"application/json">>},
+                        Headers#{<<"content-type">> => <<"application/json">>},
                         Body,
                         Req0
                     ),

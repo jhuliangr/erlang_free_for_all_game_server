@@ -105,21 +105,11 @@ websocket_info(_Info, State) ->
 terminate(_Reason, _Req, #state{player_id = undefined}) ->
     ok;
 terminate(_Reason, _Req, #state{player_id = PlayerId}) ->
-    %% Only clean up if this process is still the active connection.
-    %% A reconnect may have already replaced us with a new WS pid.
-    case player_registry:get_player(PlayerId) of
-        {ok, Player} ->
-            case player:pid(Player) =:= self() of
-                true ->
-                    web_broadcaster:unregister_ws(PlayerId),
-                    player_use_cases:leave_game(PlayerId),
-                    lager:info("WebSocket terminated for player ~s", [PlayerId]);
-                false ->
-                    lager:info("Stale WebSocket closed for player ~s (reconnected)", [PlayerId])
-            end;
-        {error, not_found} ->
-            ok
-    end,
+    %% Do NOT call leave_game here. The web_broadcaster DOWN handler
+    %% will start a 5-second grace period. If the player reconnects
+    %% within that window their state (position, HP, etc.) is preserved.
+    %% If they don't, web_broadcaster removes them after the timeout.
+    lager:info("WebSocket closed for player ~s (grace period managed by broadcaster)", [PlayerId]),
     ok.
 
 %%--------------------------------------------------------------------
@@ -137,10 +127,12 @@ handle_message(#{<<"type">> := <<"join">>, <<"name">> := Name} = Msg, State) ->
         _ ->
             case player_registry:get_player(RequestedId) of
                 {ok, Existing} ->
-                    lager:info("Player ~s reconnecting", [RequestedId]),
+                    %% Reconnecting — preserve position, HP, level, etc.
+                    lager:info("Player ~s reconnecting (preserving state)", [RequestedId]),
                     Reconnected = player:equip(Existing, character, CharacterId),
                     {RequestedId, Reconnected};
                 {error, not_found} ->
+                    %% Player was already removed (timeout expired) — fresh start
                     NewId = base64:encode(crypto:strong_rand_bytes(8)),
                     {ok, P} = player_use_cases:join_game(NewId, Name, CharacterId),
                     {NewId, P}

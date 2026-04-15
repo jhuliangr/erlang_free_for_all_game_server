@@ -31,9 +31,10 @@ init(Req0, State) ->
         <<"GET">> ->
             Config = cosmetics:default_config(),
             Body   = jsx:encode(Config),
+            Headers = ?CORS_HEADERS,
             Req = cowboy_req:reply(
                 200,
-                ?CORS_HEADERS#{<<"content-type">> => <<"application/json">>},
+                Headers#{<<"content-type">> => <<"application/json">>},
                 Body,
                 Req0
             ),
