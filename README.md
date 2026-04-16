@@ -67,7 +67,7 @@ apps/
 
 ```bash
 git clone https://github.com/jhuliangr/erlang_free_for_all_game_server
-cd server
+cd erlang_free_for_all_game_server
 ```
 
 ### 2. Configure the database
