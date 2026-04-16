@@ -66,7 +66,7 @@ apps/
 ### 1. Clone the repository
 
 ```bash
-git clone <repository-url>
+git clone https://github.com/jhuliangr/erlang_free_for_all_game_server
 cd server
 ```
 
