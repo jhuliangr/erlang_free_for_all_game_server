@@ -84,8 +84,11 @@ schedule_tick() ->
 
 -spec tick() -> ok.
 tick() ->
-    Players = player_registry:all_players(),
-    lists:foreach(fun(Player) -> send_state_update(Player, Players) end, Players).
+    AllPlayers = player_registry:all_players(),
+    %% Only include connected players (pid =/= undefined) in state updates.
+    %% Disconnected players in their grace period should be invisible.
+    Connected = [P || P <- AllPlayers, player:pid(P) =/= undefined],
+    lists:foreach(fun(Player) -> send_state_update(Player, Connected) end, Connected).
 
 -spec send_state_update(player:player(), [player:player()]) -> ok.
 send_state_update(Player, AllPlayers) ->

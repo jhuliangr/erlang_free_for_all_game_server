@@ -45,7 +45,7 @@
 init(Req, _Opts) ->
     {cowboy_websocket, Req,
      #state{player_id = undefined, player_cache = #{}},
-     #{idle_timeout => 60000, compress => true}}.
+     #{idle_timeout => 5000, compress => true}}.
 
 %%--------------------------------------------------------------------
 %% @doc WebSocket handshake complete.
@@ -53,6 +53,7 @@ init(Req, _Opts) ->
 %%--------------------------------------------------------------------
 websocket_init(State) ->
     lager:info("WebSocket connection established", []),
+    schedule_ping(),
     {ok, State}.
 
 %%--------------------------------------------------------------------
@@ -94,6 +95,10 @@ websocket_info({state_update, Players}, #state{player_cache = Cache} = State) ->
 
 websocket_info({send, Msg}, State) ->
     {reply, {text, Msg}, State};
+
+websocket_info(send_ping, State) ->
+    schedule_ping(),
+    {reply, ping, State};
 
 websocket_info(_Info, State) ->
     {ok, State}.
@@ -201,6 +206,14 @@ handle_message(#{<<"type">> := <<"equip">>,
 handle_message(_Unknown, State) ->
     ErrorReply = jsx:encode(#{type => <<"error">>, reason => <<"unknown_message_type">>}),
     {reply, {text, ErrorReply}, State}.
+
+%%--------------------------------------------------------------------
+%% Internal: schedule a WebSocket ping frame every 2.5 seconds.
+%% The client auto-responds with pong, which resets cowboy's idle_timeout.
+%% If the client is unreachable, no pong arrives and the 5s timeout fires.
+%%--------------------------------------------------------------------
+schedule_ping() ->
+    erlang:send_after(2500, self(), send_ping).
 
 %%--------------------------------------------------------------------
 %% Internal: build a diff map.
