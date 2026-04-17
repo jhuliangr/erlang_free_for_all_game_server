@@ -4,24 +4,43 @@
 %%% Orchestrates a player attack: checks cooldown, resolves hits
 %%% (instant or DoT) against nearby players, applies damage and
 %%% knockback, awards XP to the attacker, and returns hit events.
+%%%
+%%% Lag compensation: when the caller provides a `ClientTick`, each
+%%% defender's range check is run against their snapshot position at
+%%% that tick (via player_history). The tick is clamped to the oldest
+%%% retained snapshot so clients cannot abuse it to rewind arbitrarily.
+%%% Damage application and knockback always use the live state — only
+%%% the "was it a hit?" test is rewound.
 %%% @end
 %%%-------------------------------------------------------------------
 -module(process_attack).
 
--export([execute/3]).
+-export([execute/3, execute/4]).
 
 -define(XP_PER_KILL, 50.0).
 
 %%--------------------------------------------------------------------
-%% @doc Execute an attack from AttackerId at the given Angle.
-%%
-%% Checks cooldown before proceeding. Returns `{ok, [{DefenderId, Damage}]}`
-%% on success, `{error, cooldown}` if on cooldown, or `{error, Reason}`.
+%% @doc Execute an attack without lag compensation.
 %% @end
 %%--------------------------------------------------------------------
 -spec execute(binary(), float(), [binary()]) ->
     {ok, [{binary(), float()}]} | {error, term()}.
 execute(AttackerId, Angle, NearbyIds) ->
+    execute(AttackerId, Angle, NearbyIds, undefined).
+
+%%--------------------------------------------------------------------
+%% @doc Execute an attack from AttackerId at the given Angle.
+%%
+%% `ClientTick` is an optional non-negative integer: when present the
+%% attack uses lag-compensated hit detection.
+%%
+%% Checks cooldown before proceeding. Returns `{ok, [{DefenderId, Damage}]}`
+%% on success, `{error, cooldown}` if on cooldown, or `{error, Reason}`.
+%% @end
+%%--------------------------------------------------------------------
+-spec execute(binary(), float(), [binary()], integer() | undefined) ->
+    {ok, [{binary(), float()}]} | {error, term()}.
+execute(AttackerId, Angle, NearbyIds, ClientTick) ->
     case player_registry:get_player(AttackerId) of
         {error, not_found} ->
             {error, attacker_not_found};
@@ -30,10 +49,9 @@ execute(AttackerId, Angle, NearbyIds) ->
                 false ->
                     {error, cooldown};
                 true ->
-                    %% Record the attack timestamp
                     Attacker2 = player:record_attack(Attacker),
                     player_registry:update_player(AttackerId, Attacker2),
-                    Hits = process_nearby(Attacker2, Angle, NearbyIds, []),
+                    Hits = process_nearby(Attacker2, Angle, NearbyIds, ClientTick, []),
                     award_xp(AttackerId, Attacker2, Hits),
                     Results = [{DId, Dmg} || {DId, Dmg, _Xp} <- Hits],
                     {ok, Results}
@@ -59,10 +77,11 @@ award_xp(AttackerId, Attacker, Hits) ->
             ok
     end.
 
--spec process_nearby(player:player(), float(), [binary()], list()) -> list().
-process_nearby(_Attacker, _Angle, [], Acc) ->
+-spec process_nearby(player:player(), float(), [binary()],
+                     integer() | undefined, list()) -> list().
+process_nearby(_Attacker, _Angle, [], _Tick, Acc) ->
     Acc;
-process_nearby(Attacker, Angle, [DefenderId | Rest], Acc) ->
+process_nearby(Attacker, Angle, [DefenderId | Rest], Tick, Acc) ->
     NewAcc = case player:id(Attacker) =:= DefenderId of
         true ->
             Acc;
@@ -71,7 +90,8 @@ process_nearby(Attacker, Angle, [DefenderId | Rest], Acc) ->
                 {error, not_found} ->
                     Acc;
                 {ok, Defender} ->
-                    case combat_resolver:resolve(Attacker, Defender, Angle) of
+                    HitXY = hit_position(DefenderId, Defender, Tick),
+                    case combat_resolver:resolve_at(Attacker, Defender, Angle, HitXY) of
                         {error, out_of_range} ->
                             Acc;
                         {ok, Damage, KbDx, KbDy} ->
@@ -81,7 +101,19 @@ process_nearby(Attacker, Angle, [DefenderId | Rest], Acc) ->
                     end
             end
     end,
-    process_nearby(Attacker, Angle, Rest, NewAcc).
+    process_nearby(Attacker, Angle, Rest, Tick, NewAcc).
+
+-spec hit_position(binary(), player:player(), integer() | undefined) ->
+    {float(), float()}.
+hit_position(_DefenderId, Defender, undefined) ->
+    {player:x(Defender), player:y(Defender)};
+hit_position(DefenderId, Defender, Tick) when is_integer(Tick), Tick >= 0 ->
+    case player_history:position_at(DefenderId, Tick) of
+        {ok, XY, _UsedTick} -> XY;
+        not_found           -> {player:x(Defender), player:y(Defender)}
+    end;
+hit_position(_DefenderId, Defender, _Invalid) ->
+    {player:x(Defender), player:y(Defender)}.
 
 -spec apply_instant_hit(binary(), player:player(), float(), float(), float(), list()) -> list().
 apply_instant_hit(DefenderId, Defender, Damage, KbDx, KbDy, Acc) ->

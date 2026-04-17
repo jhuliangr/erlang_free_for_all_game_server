@@ -116,13 +116,14 @@ set_position(Player, X, Y) ->
 -spec move(player(), float(), float()) -> player().
 move(Player, Dx, Dy) ->
     MaxStep = 10.0,
-    %% Normalize the direction vector then scale to at most MaxStep units.
+    %% Normalize the direction vector then scale to MaxStep units.
+    %% The client sends a direction; the server enforces the fixed
+    %% per-tick step size (200 units/sec at a 50ms tick).
     Magnitude = math:sqrt(Dx * Dx + Dy * Dy),
     {StepX, StepY} = if
         Magnitude > 0.0 ->
-            Factor = min(1.0, MaxStep / Magnitude),
-            {Dx / Magnitude * MaxStep * Factor,
-             Dy / Magnitude * MaxStep * Factor};
+            {Dx / Magnitude * MaxStep,
+             Dy / Magnitude * MaxStep};
         true ->
             {0.0, 0.0}
     end,
@@ -312,8 +313,9 @@ tick_dots(Player) ->
     {Damaged#player{dot_effects = NewDots}, TotalDmg}.
 
 %%--------------------------------------------------------------------
-%% @doc XP required to reach the given level.
-%% Formula: round(100 * 1.5^(Level - 1))
+%% @doc XP required to advance from `Level` to `Level + 1`.
+%% Formula: round(100 * 1.5^(Level - 1)) — so level 1→2 costs 100,
+%% level 2→3 costs 150, level 3→4 costs 225, and so on.
 %% @end
 %%--------------------------------------------------------------------
 -spec xp_for_level(pos_integer()) -> float().
@@ -326,7 +328,7 @@ xp_for_level(Level) ->
 
 -spec level_up(player()) -> player().
 level_up(Player) ->
-    Required = xp_for_level(Player#player.level + 1),
+    Required = xp_for_level(Player#player.level),
     if
         Player#player.xp >= Required ->
             NewLevel = Player#player.level + 1,

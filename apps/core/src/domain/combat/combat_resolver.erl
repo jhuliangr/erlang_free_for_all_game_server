@@ -9,6 +9,7 @@
 
 -export([
     resolve/3,
+    resolve_at/4,
     is_in_range/5
 ]).
 
@@ -40,7 +41,23 @@ is_in_range(X1, Y1, X2, Y2, Range) ->
     {ok, float(), float(), float()} |
     {dot, float(), non_neg_integer(), float(), float()} |
     {error, out_of_range}.
-resolve(Attacker, Defender, _Angle) ->
+resolve(Attacker, Defender, Angle) ->
+    resolve_at(Attacker, Defender, Angle, {player:x(Defender), player:y(Defender)}).
+
+%%--------------------------------------------------------------------
+%% @doc Like resolve/3 but uses the given {X, Y} as the defender's
+%% position for the in-range check. The defender's live state is still
+%% used for damage scaling and knockback direction (the knockback is
+%% applied to the live position on return). This is what powers
+%% lag-compensated hit detection.
+%% @end
+%%--------------------------------------------------------------------
+-spec resolve_at(player:player(), player:player(), float(),
+                 {float(), float()}) ->
+    {ok, float(), float(), float()} |
+    {dot, float(), non_neg_integer(), float(), float()} |
+    {error, out_of_range}.
+resolve_at(Attacker, Defender, _Angle, {HitX, HitY}) ->
     Char = player:character(Attacker),
     Stats = character_stats:get(Char),
     Range = maps:get(attack_range, Stats),
@@ -48,14 +65,17 @@ resolve(Attacker, Defender, _Angle) ->
 
     Ax = player:x(Attacker),
     Ay = player:y(Attacker),
-    Dx = player:x(Defender),
-    Dy = player:y(Defender),
 
-    case is_in_range(Ax, Ay, Dx, Dy, Range) of
+    case is_in_range(Ax, Ay, HitX, HitY, Range) of
         false ->
             {error, out_of_range};
         true ->
-            {KbX, KbY} = knockback_vector(Ax, Ay, Dx, Dy, KbDist),
+            %% Knockback uses the live defender position so the visual
+            %% result is consistent with the current world state — we
+            %% only rewind for the range check.
+            LiveX = player:x(Defender),
+            LiveY = player:y(Defender),
+            {KbX, KbY} = knockback_vector(Ax, Ay, LiveX, LiveY, KbDist),
             case maps:get(dot, Stats) of
                 false ->
                     BaseDmg = maps:get(base_damage, Stats),

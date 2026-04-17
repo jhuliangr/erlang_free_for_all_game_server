@@ -2,8 +2,17 @@
 %%% @doc Game loop gen_server.
 %%%
 %%% Drives the authoritative server tick at 50 ms intervals. On each
-%%% tick every connected player receives a `state_update` message
-%%% containing the list of nearby players (within 500 units).
+%%% tick every connected player receives a `state_update` message with
+%%% the tick number, server timestamp, and the list of visible players
+%%% tiered by distance:
+%%%
+%%%   near (< NEAR_RADIUS)   — included every tick      (full rate)
+%%%   mid  (< FAR_RADIUS)    — included every Nth tick  (throttled)
+%%%   far  (>= FAR_RADIUS)   — omitted
+%%%
+%%% The tick counter and server timestamp travel with every outgoing
+%%% message so clients can reconcile inputs and measure round-trip
+%%% latency without relying on wall-clock sync.
 %%% @end
 %%%-------------------------------------------------------------------
 -module(game_loop).
@@ -11,19 +20,22 @@
 -behaviour(gen_server).
 
 %% Public API
--export([start_link/0, stop/0]).
+-export([start_link/0, stop/0, current_tick/0]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          terminate/2, code_change/3]).
 
 -define(TICK_MS, 50).
--define(NEARBY_RADIUS, 500.0).
+-define(NEAR_RADIUS, 250.0).
+-define(FAR_RADIUS, 500.0).
+-define(MID_THROTTLE, 3).  %% mid-range players refreshed every 3rd tick
 -define(DOT_CHECK_INTERVAL, 1000).  %% Process DoTs every 1 second
 -define(SERVER, ?MODULE).
 
 -record(state, {
-    last_dot_tick :: integer()
+    last_dot_tick :: integer(),
+    tick          :: non_neg_integer()
 }).
 
 %%--------------------------------------------------------------------
@@ -39,22 +51,36 @@ stop() ->
     gen_server:stop(?SERVER).
 
 %%--------------------------------------------------------------------
+%% @doc Read the current tick counter. Used by lag compensation.
+%% @end
+%%--------------------------------------------------------------------
+-spec current_tick() -> non_neg_integer().
+current_tick() ->
+    try gen_server:call(?SERVER, current_tick, 100)
+    catch _:_ -> 0
+    end.
+
+%%--------------------------------------------------------------------
 %% gen_server callbacks
 %%--------------------------------------------------------------------
 
 init([]) ->
-    lager:info("Game loop starting, tick=~pms", [?TICK_MS]),
+    lager:info("Game loop starting, tick=~pms near=~p far=~p",
+               [?TICK_MS, ?NEAR_RADIUS, ?FAR_RADIUS]),
     schedule_tick(),
-    {ok, #state{last_dot_tick = erlang:system_time(millisecond)}}.
+    {ok, #state{last_dot_tick = erlang:system_time(millisecond), tick = 0}}.
 
+handle_call(current_tick, _From, #state{tick = T} = State) ->
+    {reply, T, State};
 handle_call(_Request, _From, State) ->
     {reply, {error, unknown_call}, State}.
 
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
-handle_info(tick, State) ->
-    tick(),
+handle_info(tick, #state{tick = T} = State) ->
+    NextTick = T + 1,
+    tick(NextTick),
     Now = erlang:system_time(millisecond),
     NewState = case Now - State#state.last_dot_tick >= ?DOT_CHECK_INTERVAL of
         true ->
@@ -64,7 +90,7 @@ handle_info(tick, State) ->
             State
     end,
     schedule_tick(),
-    {noreply, NewState};
+    {noreply, NewState#state{tick = NextTick}};
 handle_info(_Info, State) ->
     {noreply, State}.
 
@@ -82,16 +108,25 @@ code_change(_OldVsn, State, _Extra) ->
 schedule_tick() ->
     erlang:send_after(?TICK_MS, self(), tick).
 
--spec tick() -> ok.
-tick() ->
+-spec tick(non_neg_integer()) -> ok.
+tick(TickN) ->
     AllPlayers = player_registry:all_players(),
+    %% Snapshot positions for lag-compensation rewind. Include
+    %% disconnected players too: an attack can legitimately target
+    %% someone whose WS dropped mid-swing during the grace period.
+    player_history:snapshot(TickN, AllPlayers),
     %% Only include connected players (pid =/= undefined) in state updates.
     %% Disconnected players in their grace period should be invisible.
     Connected = [P || P <- AllPlayers, player:pid(P) =/= undefined],
-    lists:foreach(fun(Player) -> send_state_update(Player, Connected) end, Connected).
+    Now = erlang:system_time(millisecond),
+    lists:foreach(
+      fun(Player) -> send_state_update(Player, Connected, TickN, Now) end,
+      Connected
+    ).
 
--spec send_state_update(player:player(), [player:player()]) -> ok.
-send_state_update(Player, AllPlayers) ->
+-spec send_state_update(player:player(), [player:player()],
+                        non_neg_integer(), integer()) -> ok.
+send_state_update(Player, AllPlayers, TickN, Now) ->
     Pid = player:pid(Player),
     case Pid of
         undefined ->
@@ -99,17 +134,33 @@ send_state_update(Player, AllPlayers) ->
         _ ->
             Px = player:x(Player),
             Py = player:y(Player),
-            Nearby = lists:filter(
-                fun(Other) ->
-                    distance_sq(Px, Py, player:x(Other), player:y(Other)) =<
-                        ?NEARBY_RADIUS * ?NEARBY_RADIUS
-                end,
-                AllPlayers
-            ),
-            NearbyMaps = [player:to_map(P) || P <- Nearby],
-            Pid ! {state_update, NearbyMaps},
+            {Near, Mid} = partition_by_distance(Px, Py, AllPlayers),
+            Visible = case TickN rem ?MID_THROTTLE =:= 0 of
+                true  -> Near ++ Mid;
+                false -> Near
+            end,
+            NearbyMaps = [player:to_map(P) || P <- Visible],
+            Pid ! {state_update, NearbyMaps, TickN, Now},
             ok
     end.
+
+-spec partition_by_distance(float(), float(), [player:player()]) ->
+    {[player:player()], [player:player()]}.
+partition_by_distance(Px, Py, Players) ->
+    NearSq = ?NEAR_RADIUS * ?NEAR_RADIUS,
+    FarSq  = ?FAR_RADIUS * ?FAR_RADIUS,
+    lists:foldl(
+      fun(Other, {NearAcc, MidAcc}) ->
+          D2 = distance_sq(Px, Py, player:x(Other), player:y(Other)),
+          if
+              D2 =< NearSq -> {[Other | NearAcc], MidAcc};
+              D2 =< FarSq  -> {NearAcc, [Other | MidAcc]};
+              true         -> {NearAcc, MidAcc}
+          end
+      end,
+      {[], []},
+      Players
+    ).
 
 -spec distance_sq(float(), float(), float(), float()) -> float().
 distance_sq(X1, Y1, X2, Y2) ->
