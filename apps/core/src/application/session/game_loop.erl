@@ -111,6 +111,10 @@ schedule_tick() ->
 -spec tick(non_neg_integer()) -> ok.
 tick(TickN) ->
     AllPlayers = player_registry:all_players(),
+    %% Snapshot positions for lag-compensation rewind. Include
+    %% disconnected players too: an attack can legitimately target
+    %% someone whose WS dropped mid-swing during the grace period.
+    player_history:snapshot(TickN, AllPlayers),
     %% Only include connected players (pid =/= undefined) in state updates.
     %% Disconnected players in their grace period should be invisible.
     Connected = [P || P <- AllPlayers, player:pid(P) =/= undefined],
