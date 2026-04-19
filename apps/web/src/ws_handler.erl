@@ -49,11 +49,21 @@
 -export([init/2, websocket_init/1, websocket_handle/2,
          websocket_info/2, terminate/3]).
 
-%% Minimum milliseconds between accepted move inputs (anti-spam).
-%% Tick is 50ms; allowing up to 25 moves/sec gives some headroom for
-%% jittery clients without letting a flood of inputs bypass the
-%% per-move speed cap.
--define(MOVE_MIN_INTERVAL_MS, 40).
+%% Minimum milliseconds between accepted move inputs (DoS guard).
+%% The authoritative speed cap is enforced by player:move/4 using a
+%% time-based step (max MAX_SPEED * dt per accepted move), so this
+%% interval only exists to cap connection work under flood. It is set
+%% well below the client's self-throttle (40ms) to absorb network
+%% jitter without silently dropping honest inputs — dropping a move
+%% that the client predicted locally causes visible retrace.
+-define(MOVE_MIN_INTERVAL_MS, 25).
+
+%% Authoritative speed cap (units/sec). Enforced by computing the
+%% per-move step as min(MAX_STEP_CAP, MAX_SPEED * dt_since_last_move).
+-define(MAX_SPEED, 200.0).
+%% Absolute cap per single accepted move. Prevents teleport when dt is
+%% very large (long idle, first move after join).
+-define(MAX_STEP_CAP, 10.0).
 
 -record(state, {
     player_id        :: binary() | undefined,
@@ -136,6 +146,20 @@ websocket_info({state_update, Players, Tick, ServerTime},
 websocket_info({send, Msg}, State) ->
     {reply, {text, Msg}, State};
 
+websocket_info({kick, Reason}, State) ->
+    %% Sent by a newer ws_handler that is taking over this player's
+    %% session. We notify the client with a `kicked` frame then close
+    %% the connection. The new handler has already set the player's
+    %% pid to itself, so when this process terminates the broadcaster's
+    %% DOWN handler will see the mismatch and skip the grace period.
+    ReasonBin = case Reason of
+        B when is_binary(B) -> B;
+        A when is_atom(A)   -> atom_to_binary(A, utf8);
+        _                   -> <<"kicked">>
+    end,
+    Payload = jsx:encode(#{type => <<"kicked">>, reason => ReasonBin}),
+    {reply, [{text, Payload}, {close, 4000, ReasonBin}], State};
+
 websocket_info(send_ping, State) ->
     schedule_ping(),
     {reply, ping, State};
@@ -164,28 +188,44 @@ terminate(_Reason, _Req, #state{player_id = PlayerId}) ->
 handle_message(#{<<"type">> := <<"join">>, <<"name">> := Name} = Msg, State) ->
     RequestedId = maps:get(<<"playerId">>, Msg, undefined),
     CharacterId = maps:get(<<"character">>, Msg, <<"knight">>),
-    {PlayerId, Player} = case RequestedId of
+    Self = self(),
+    {PlayerId, Player, OldPid} = case RequestedId of
         undefined ->
             NewId = base64:encode(crypto:strong_rand_bytes(8)),
             {ok, P} = player_use_cases:join_game(NewId, Name, CharacterId),
-            {NewId, P};
+            {NewId, P, undefined};
         _ ->
             case player_registry:get_player(RequestedId) of
                 {ok, Existing} ->
                     %% Reconnecting — preserve position, HP, level, etc.
+                    %% Capture the prior owner so we can kick it after
+                    %% we've claimed the pid slot.
                     lager:info("Player ~s reconnecting (preserving state)", [RequestedId]),
                     Reconnected = player:equip(Existing, character, CharacterId),
-                    {RequestedId, Reconnected};
+                    {RequestedId, Reconnected, player:pid(Existing)};
                 {error, not_found} ->
                     %% Player was already removed (timeout expired) — fresh start
                     NewId = base64:encode(crypto:strong_rand_bytes(8)),
                     {ok, P} = player_use_cases:join_game(NewId, Name, CharacterId),
-                    {NewId, P}
+                    {NewId, P, undefined}
             end
     end,
-    Updated = player:set_pid(Player, self()),
+    Updated = player:set_pid(Player, Self),
     player_registry:update_player(PlayerId, Updated),
-    web_broadcaster:register_ws(PlayerId, self()),
+    %% Session takeover: if another live ws_handler was owning this
+    %% player, kick it *after* we've persisted our own pid. Order
+    %% matters — web_broadcaster's DOWN handler will only start a
+    %% grace period if the exiting pid still matches the registry's
+    %% pid, so claiming first prevents a spurious grace timer.
+    case OldPid of
+        undefined -> ok;
+        Self      -> ok;
+        _         ->
+            lager:info("Player ~s: session takeover, kicking old pid ~p",
+                       [PlayerId, OldPid]),
+            OldPid ! {kick, duplicate_session}
+    end,
+    web_broadcaster:register_ws(PlayerId, Self),
     Welcome = jsx:encode(#{
         type       => <<"welcome">>,
         playerId   => PlayerId,
@@ -205,16 +245,29 @@ handle_message(#{<<"type">> := <<"move">>, <<"dx">> := Dx, <<"dy">> := Dy} = Msg
   when PlayerId =/= undefined ->
     Now = erlang:system_time(millisecond),
     CT  = optional_tick(Msg),
-    NextCT = update_client_tick(State#state.last_client_tick, CT),
     case Now - LastAt >= ?MOVE_MIN_INTERVAL_MS of
         false ->
-            %% Drop: client exceeded the input rate. Record the tick
-            %% so the next ack reflects the latest observed input.
-            {ok, State#state{last_client_tick = NextCT}};
+            %% Drop: client exceeded the input rate. Do NOT advance
+            %% last_client_tick — if we did, the next state_update's
+            %% ackTick would cover a tick the server never applied, and
+            %% the client's reconciliation would discard the matching
+            %% pending input from its replay buffer. That shows up on
+            %% screen as the local player pausing or stepping backward
+            %% while walking in a straight line.
+            {ok, State};
         true ->
+            NextCT = update_client_tick(State#state.last_client_tick, CT),
+            %% Time-based step cap: the distance applied per accepted
+            %% move is bounded by MAX_SPEED * dt, so the total distance
+            %% per second cannot exceed MAX_SPEED regardless of how
+            %% many inputs slip through the rate limit. Absolute per-
+            %% move cap of MAX_STEP_CAP prevents teleport on the first
+            %% move after a long pause (when dt is huge).
+            DtMs   = Now - LastAt,
+            MaxStep = erlang:min(?MAX_STEP_CAP, ?MAX_SPEED * DtMs / 1000.0),
             case player_registry:get_player(PlayerId) of
                 {ok, Player} ->
-                    Moved  = player:move(Player, float(Dx), float(Dy)),
+                    Moved  = player:move(Player, float(Dx), float(Dy), MaxStep),
                     Moved2 = player:set_pid(Moved, self()),
                     player_registry:update_player(PlayerId, Moved2),
                     spatial_index:update(PlayerId, player:x(Moved2), player:y(Moved2));
