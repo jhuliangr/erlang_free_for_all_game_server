@@ -118,15 +118,35 @@ tick(TickN) ->
     %% Only include connected players (pid =/= undefined) in state updates.
     %% Disconnected players in their grace period should be invisible.
     Connected = [P || P <- AllPlayers, player:pid(P) =/= undefined],
+    %% Process pickup pickups BEFORE building state updates so that
+    %% any heals land in the same frame the pickup disappears.
+    Healed = process_pickups(Connected),
+    Pickups = pickup_manager:get_all(),
     Now = erlang:system_time(millisecond),
     lists:foreach(
-      fun(Player) -> send_state_update(Player, Connected, TickN, Now) end,
-      Connected
+      fun(Player) -> send_state_update(Player, Healed, Pickups, TickN, Now) end,
+      Healed
     ).
 
--spec send_state_update(player:player(), [player:player()],
+-spec process_pickups([player:player()]) -> [player:player()].
+process_pickups(Players) ->
+    lists:map(
+      fun(P) ->
+          case pickup_manager:try_consume(player:x(P), player:y(P)) of
+              [] -> P;
+              Consumed ->
+                  Heal = pickup_manager:heal_amount() * length(Consumed),
+                  Healed = player:heal(P, Heal),
+                  player_registry:update_player(player:id(P), Healed),
+                  Healed
+          end
+      end,
+      Players
+    ).
+
+-spec send_state_update(player:player(), [player:player()], [map()],
                         non_neg_integer(), integer()) -> ok.
-send_state_update(Player, AllPlayers, TickN, Now) ->
+send_state_update(Player, AllPlayers, Pickups, TickN, Now) ->
     Pid = player:pid(Player),
     case Pid of
         undefined ->
@@ -140,7 +160,7 @@ send_state_update(Player, AllPlayers, TickN, Now) ->
                 false -> Near
             end,
             NearbyMaps = [player:to_map(P) || P <- Visible],
-            Pid ! {state_update, NearbyMaps, TickN, Now},
+            Pid ! {state_update, NearbyMaps, Pickups, TickN, Now},
             ok
     end.
 
@@ -193,11 +213,15 @@ process_player_dots(Player) ->
                 damage     => DotDmg
             }),
             web_broadcaster:broadcast(Event),
-            %% Handle DoT kill
+            %% Handle DoT kill: record death, persist, then remove from
+            %% the registry and spatial index. Without this the corpse
+            %% stays visible and attackable, enabling repeated XP gain
+            %% on a player already at 0 HP.
             case player:hp(Updated) =< +0.0 of
                 true ->
                     Dead = player:add_death(Updated),
-                    player_registry:update_player(PlayerId, Dead);
+                    player_registry:update_player(PlayerId, Dead),
+                    player_use_cases:leave_game(PlayerId);
                 false ->
                     ok
             end;

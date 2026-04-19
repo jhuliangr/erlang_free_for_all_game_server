@@ -11,8 +11,10 @@
     new/2,
     new/3,
     move/3,
+    move/4,
     set_position/3,
     take_damage/2,
+    heal/2,
     gain_xp/2,
     equip/3,
     add_kill/1,
@@ -110,15 +112,23 @@ set_position(Player, X, Y) ->
 
 %%--------------------------------------------------------------------
 %% @doc Move the player by (Dx, Dy), clamped to world bounds.
-%% Speed is 200 units/sec; at 50ms tick, max 10 units per tick.
+%% Uses the default 10.0 unit max step (legacy fixed-step behaviour,
+%% retained for tests and code paths without timing information).
 %% @end
 %%--------------------------------------------------------------------
 -spec move(player(), float(), float()) -> player().
 move(Player, Dx, Dy) ->
-    MaxStep = 10.0,
-    %% Normalize the direction vector then scale to MaxStep units.
-    %% The client sends a direction; the server enforces the fixed
-    %% per-tick step size (200 units/sec at a 50ms tick).
+    move(Player, Dx, Dy, 10.0).
+
+%%--------------------------------------------------------------------
+%% @doc Move the player by (Dx, Dy), clamped to world bounds, with an
+%% explicit maximum step length. Callers compute MaxStep from elapsed
+%% wall time since the last accepted move so the authoritative speed
+%% cap is measured per-second, not per-tick — see ws_handler.
+%% @end
+%%--------------------------------------------------------------------
+-spec move(player(), float(), float(), float()) -> player().
+move(Player, Dx, Dy, MaxStep) ->
     Magnitude = math:sqrt(Dx * Dx + Dy * Dy),
     {StepX, StepY} = if
         Magnitude > 0.0 ->
@@ -127,7 +137,6 @@ move(Player, Dx, Dy) ->
         true ->
             {0.0, 0.0}
     end,
-    %% Clamp to world bounds
     {W, H} = world:bounds(),
     NewX = world:clamp(Player#player.x + StepX, 0.0, float(W)),
     NewY = world:clamp(Player#player.y + StepY, 0.0, float(H)),
@@ -141,6 +150,18 @@ move(Player, Dx, Dy) ->
 take_damage(Player, Damage) ->
     NewHp = max(0.0, Player#player.hp - Damage),
     Player#player{hp = NewHp}.
+
+%%--------------------------------------------------------------------
+%% @doc Restore HP on the player, capped at their max_hp.
+%% @end
+%%--------------------------------------------------------------------
+-spec heal(player(), number()) -> player().
+heal(Player, Amount) when Amount > 0 ->
+    NewHp = min(float(Player#player.max_hp),
+                Player#player.hp + float(Amount)),
+    Player#player{hp = NewHp};
+heal(Player, _Amount) ->
+    Player.
 
 %%--------------------------------------------------------------------
 %% @doc Give XP to the player, leveling up when threshold is reached.

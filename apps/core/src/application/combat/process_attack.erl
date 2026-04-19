@@ -117,24 +117,42 @@ hit_position(_DefenderId, Defender, _Invalid) ->
 
 -spec apply_instant_hit(binary(), player:player(), float(), float(), float(), list()) -> list().
 apply_instant_hit(DefenderId, Defender, Damage, KbDx, KbDy, Acc) ->
-    Damaged     = player:take_damage(Defender, Damage),
-    KnockedBack = apply_knockback(Damaged, KbDx, KbDy),
-    player_registry:update_player(DefenderId, KnockedBack),
-    spatial_index:update(DefenderId, player:x(KnockedBack), player:y(KnockedBack)),
-    IsKill = player:hp(KnockedBack) =< +0.0,
-    Xp = case IsKill of
-        true  -> ?XP_PER_KILL;
-        false -> 0.0
-    end,
-    case IsKill of
+    %% Guard: if the defender was already at 0 HP we must not apply
+    %% damage nor award XP. This can happen when two concurrent attacks
+    %% resolve the same victim before the first one's removal has
+    %% propagated through player_registry.
+    case player:hp(Defender) =< +0.0 of
         true ->
-            Dead = player:add_death(KnockedBack),
-            player_registry:update_player(DefenderId, Dead);
+            Acc;
         false ->
-            ok
-    end,
-    lager:info("Hit: defender=~s damage=~p kill=~p", [DefenderId, Damage, IsKill]),
-    [{DefenderId, Damage, Xp} | Acc].
+            Damaged     = player:take_damage(Defender, Damage),
+            KnockedBack = apply_knockback(Damaged, KbDx, KbDy),
+            IsKill = player:hp(KnockedBack) =< +0.0,
+            Xp = case IsKill of
+                true  -> ?XP_PER_KILL;
+                false -> 0.0
+            end,
+            case IsKill of
+                true ->
+                    %% Record the death on the defender so the session
+                    %% stats saved by leave_game reflect it, then remove
+                    %% from the registry and spatial index. Removal is
+                    %% what prevents the "keep hitting a corpse for XP"
+                    %% exploit: the next query_nearby call will not
+                    %% return this id.
+                    Dead = player:add_death(KnockedBack),
+                    player_registry:update_player(DefenderId, Dead),
+                    player_use_cases:leave_game(DefenderId);
+                false ->
+                    player_registry:update_player(DefenderId, KnockedBack),
+                    spatial_index:update(DefenderId,
+                                         player:x(KnockedBack),
+                                         player:y(KnockedBack))
+            end,
+            lager:info("Hit: defender=~s damage=~p kill=~p",
+                       [DefenderId, Damage, IsKill]),
+            [{DefenderId, Damage, Xp} | Acc]
+    end.
 
 -spec apply_dot_hit(binary(), player:player(), float(), non_neg_integer(), float(), float(), list()) -> list().
 apply_dot_hit(DefenderId, Defender, Dps, Duration, KbDx, KbDy, Acc) ->

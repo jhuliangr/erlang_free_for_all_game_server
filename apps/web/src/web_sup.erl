@@ -40,6 +40,9 @@ init([]) ->
         child_spec(spatial_index,   spatial_index,   start_link, []),
         child_spec(player_history,  player_history,  start_link, []),
         child_spec(web_broadcaster, web_broadcaster, start_link, []),
+        %% Pickup manager must start before game_loop so the first
+        %% tick can already find pickups in the world.
+        child_spec(pickup_manager,  pickup_manager,  start_link, []),
         child_spec(game_loop,       game_loop,       start_link, [])
     ],
 
