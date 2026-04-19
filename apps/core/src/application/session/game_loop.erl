@@ -193,11 +193,15 @@ process_player_dots(Player) ->
                 damage     => DotDmg
             }),
             web_broadcaster:broadcast(Event),
-            %% Handle DoT kill
+            %% Handle DoT kill: record death, persist, then remove from
+            %% the registry and spatial index. Without this the corpse
+            %% stays visible and attackable, enabling repeated XP gain
+            %% on a player already at 0 HP.
             case player:hp(Updated) =< +0.0 of
                 true ->
                     Dead = player:add_death(Updated),
-                    player_registry:update_player(PlayerId, Dead);
+                    player_registry:update_player(PlayerId, Dead),
+                    player_use_cases:leave_game(PlayerId);
                 false ->
                     ok
             end;
