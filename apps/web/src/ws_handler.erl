@@ -120,7 +120,7 @@ websocket_handle(_Frame, State) ->
 %% @doc Handle Erlang messages sent to this process.
 %% @end
 %%--------------------------------------------------------------------
-websocket_info({state_update, Players, Tick, ServerTime},
+websocket_info({state_update, Players, Pickups, Tick, ServerTime},
                #state{player_cache = Cache, last_client_tick = LastCT} = State) ->
     Diffs = [diff_player(P, maps:get(maps:get(id, P), Cache, undefined)) || P <- Players],
 
@@ -133,6 +133,7 @@ websocket_info({state_update, Players, Tick, ServerTime},
         type       => <<"state_update">>,
         players    => Diffs,
         removed    => Removed,
+        pickups    => Pickups,
         tick       => Tick,
         serverTime => ServerTime
     },

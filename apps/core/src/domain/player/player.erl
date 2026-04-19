@@ -14,6 +14,7 @@
     move/4,
     set_position/3,
     take_damage/2,
+    heal/2,
     gain_xp/2,
     equip/3,
     add_kill/1,
@@ -149,6 +150,18 @@ move(Player, Dx, Dy, MaxStep) ->
 take_damage(Player, Damage) ->
     NewHp = max(0.0, Player#player.hp - Damage),
     Player#player{hp = NewHp}.
+
+%%--------------------------------------------------------------------
+%% @doc Restore HP on the player, capped at their max_hp.
+%% @end
+%%--------------------------------------------------------------------
+-spec heal(player(), number()) -> player().
+heal(Player, Amount) when Amount > 0 ->
+    NewHp = min(float(Player#player.max_hp),
+                Player#player.hp + float(Amount)),
+    Player#player{hp = NewHp};
+heal(Player, _Amount) ->
+    Player.
 
 %%--------------------------------------------------------------------
 %% @doc Give XP to the player, leveling up when threshold is reached.
