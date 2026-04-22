@@ -142,7 +142,7 @@ apply_instant_hit(DefenderId, Defender, Damage, KbDx, KbDy, Acc) ->
                     %% return this id.
                     Dead = player:add_death(KnockedBack),
                     player_registry:update_player(DefenderId, Dead),
-                    player_use_cases:leave_game(DefenderId);
+                    player_use_cases:kill_player(DefenderId);
                 false ->
                     player_registry:update_player(DefenderId, KnockedBack),
                     spatial_index:update(DefenderId,

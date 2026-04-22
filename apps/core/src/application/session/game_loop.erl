@@ -221,7 +221,7 @@ process_player_dots(Player) ->
                 true ->
                     Dead = player:add_death(Updated),
                     player_registry:update_player(PlayerId, Dead),
-                    player_use_cases:leave_game(PlayerId);
+                    player_use_cases:kill_player(PlayerId);
                 false ->
                     ok
             end;
