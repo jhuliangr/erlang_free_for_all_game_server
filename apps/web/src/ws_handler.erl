@@ -318,6 +318,21 @@ handle_message(#{<<"type">> := <<"equip">>,
     player_use_cases:equip_cosmetic(PlayerId, Slot, ItemId),
     {ok, State};
 
+%% Application-level ping for clock sync. Echoes the client's timestamp
+%% `t` back untouched (so the client can compute RTT without maintaining
+%% a pending-table) and stamps the current server time on arrival. The
+%% client estimates the server clock as `serverTime + rtt/2`. This is a
+%% separate channel from the cowboy-level ping frame (schedule_ping/0),
+%% which only exists to detect dead connections.
+handle_message(#{<<"type">> := <<"ping">>} = Msg, State) ->
+    T = maps:get(<<"t">>, Msg, 0),
+    Pong = jsx:encode(#{
+        type       => <<"pong">>,
+        t          => T,
+        serverTime => erlang:system_time(millisecond)
+    }),
+    {reply, {text, Pong}, State};
+
 handle_message(_Unknown, State) ->
     ErrorReply = jsx:encode(#{type => <<"error">>, reason => <<"unknown_message_type">>}),
     {reply, {text, ErrorReply}, State}.
