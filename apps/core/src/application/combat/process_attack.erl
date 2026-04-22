@@ -97,7 +97,8 @@ process_nearby(Attacker, Angle, [DefenderId | Rest], Tick, Acc) ->
                         {ok, Damage, KbDx, KbDy} ->
                             apply_instant_hit(DefenderId, Defender, Damage, KbDx, KbDy, Acc);
                         {dot, Dps, Duration, KbDx, KbDy} ->
-                            apply_dot_hit(DefenderId, Defender, Dps, Duration, KbDx, KbDy, Acc)
+                            apply_dot_hit(DefenderId, Defender, player:id(Attacker),
+                                          Dps, Duration, KbDx, KbDy, Acc)
                     end
             end
     end,
@@ -154,15 +155,16 @@ apply_instant_hit(DefenderId, Defender, Damage, KbDx, KbDy, Acc) ->
             [{DefenderId, Damage, Xp} | Acc]
     end.
 
--spec apply_dot_hit(binary(), player:player(), float(), non_neg_integer(), float(), float(), list()) -> list().
-apply_dot_hit(DefenderId, Defender, Dps, Duration, KbDx, KbDy, Acc) ->
-    Dotted      = player:add_dot(Defender, Dps, Duration),
+-spec apply_dot_hit(binary(), player:player(), binary(), float(), non_neg_integer(), float(), float(), list()) -> list().
+apply_dot_hit(DefenderId, Defender, AttackerId, Dps, Duration, KbDx, KbDy, Acc) ->
+    Dotted      = player:add_dot(Defender, AttackerId, Dps, Duration),
     KnockedBack = apply_knockback(Dotted, KbDx, KbDy),
     player_registry:update_player(DefenderId, KnockedBack),
     spatial_index:update(DefenderId, player:x(KnockedBack), player:y(KnockedBack)),
     %% Report total expected DoT damage for the combat event
     TotalDmg = Dps * Duration,
-    lager:info("DoT applied: defender=~s dps=~p dur=~p", [DefenderId, Dps, Duration]),
+    lager:info("DoT applied: attacker=~s defender=~s dps=~p dur=~p",
+               [AttackerId, DefenderId, Dps, Duration]),
     [{DefenderId, TotalDmg, 0.0} | Acc].
 
 -spec apply_knockback(player:player(), float(), float()) -> player:player().

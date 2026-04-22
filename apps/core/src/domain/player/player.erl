@@ -19,7 +19,7 @@
     equip/3,
     add_kill/1,
     add_death/1,
-    add_dot/3,
+    add_dot/4,
     tick_dots/1,
     can_attack/1,
     record_attack/1,
@@ -59,6 +59,11 @@
 }).
 
 -type dot_effect() :: #{
+    %% Id of the player who originally applied this DoT. Preserved so
+    %% per-tick combat_events can credit the source (e.g. for the
+    %% "killed by X" screen) — without it, DoT ticks lose attribution
+    %% because they fire decoupled from the applier's attack frame.
+    applier_id     := binary(),
     damage_per_sec := float(),
     ticks_left     := non_neg_integer(),
     last_tick_at   := integer()
@@ -286,10 +291,11 @@ record_attack(Player) ->
 %% @doc Apply a new DoT effect to this player.
 %% @end
 %%--------------------------------------------------------------------
--spec add_dot(player(), float(), non_neg_integer()) -> player().
-add_dot(Player, DamagePerSec, DurationSec) ->
+-spec add_dot(player(), binary(), float(), non_neg_integer()) -> player().
+add_dot(Player, ApplierId, DamagePerSec, DurationSec) ->
     Now = erlang:system_time(millisecond),
-    Dot = #{damage_per_sec => DamagePerSec,
+    Dot = #{applier_id     => ApplierId,
+            damage_per_sec => DamagePerSec,
             ticks_left     => DurationSec,
             last_tick_at   => Now},
     Player#player{dot_effects = [Dot | Player#player.dot_effects]}.
@@ -297,41 +303,49 @@ add_dot(Player, DamagePerSec, DurationSec) ->
 %%--------------------------------------------------------------------
 %% @doc Process all active DoT effects. Called once per second.
 %%
-%% Returns `{UpdatedPlayer, TotalDotDamage}` where TotalDotDamage
-%% is the sum of damage applied this tick (for combat event broadcast).
+%% Returns `{UpdatedPlayer, Hits}` where `Hits` is a list of
+%% `{ApplierId, Damage}` pairs — one entry per DoT effect that
+%% ticked this round. The split (rather than a single total) lets
+%% the caller attribute each tick's damage to its original source
+%% for per-applier combat_events.
 %% @end
 %%--------------------------------------------------------------------
--spec tick_dots(player()) -> {player(), float()}.
+-spec tick_dots(player()) -> {player(), [{binary(), float()}]}.
 tick_dots(#player{dot_effects = []} = Player) ->
-    {Player, 0.0};
+    {Player, []};
 tick_dots(Player) ->
     Now = erlang:system_time(millisecond),
-    {NewDots, TotalDmg} = lists:foldl(
-        fun(#{damage_per_sec := Dps, ticks_left := Left, last_tick_at := LastAt} = Dot,
-            {DotsAcc, DmgAcc}) ->
+    {NewDots, Hits} = lists:foldl(
+        fun(#{applier_id := ApplierId,
+              damage_per_sec := Dps,
+              ticks_left := Left,
+              last_tick_at := LastAt} = Dot,
+            {DotsAcc, HitsAcc}) ->
             Elapsed = Now - LastAt,
             case Elapsed >= 1000 andalso Left > 0 of
                 true ->
                     Remaining = Left - 1,
                     NewDot = Dot#{ticks_left := Remaining, last_tick_at := Now},
+                    NewHits = [{ApplierId, Dps} | HitsAcc],
                     case Remaining > 0 of
-                        true  -> {[NewDot | DotsAcc], DmgAcc + Dps};
-                        false -> {DotsAcc, DmgAcc + Dps}
+                        true  -> {[NewDot | DotsAcc], NewHits};
+                        false -> {DotsAcc, NewHits}
                     end;
                 false when Left > 0 ->
-                    {[Dot | DotsAcc], DmgAcc};
+                    {[Dot | DotsAcc], HitsAcc};
                 false ->
-                    {DotsAcc, DmgAcc}
+                    {DotsAcc, HitsAcc}
             end
         end,
-        {[], 0.0},
+        {[], []},
         Player#player.dot_effects
     ),
+    TotalDmg = lists:foldl(fun({_, D}, Acc) -> Acc + D end, 0.0, Hits),
     Damaged = case TotalDmg > 0.0 of
         true  -> take_damage(Player, TotalDmg);
         false -> Player
     end,
-    {Damaged#player{dot_effects = NewDots}, TotalDmg}.
+    {Damaged#player{dot_effects = NewDots}, Hits}.
 
 %%--------------------------------------------------------------------
 %% @doc XP required to advance from `Level` to `Level + 1`.
