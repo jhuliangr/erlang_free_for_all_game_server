@@ -165,6 +165,16 @@ websocket_info(send_ping, State) ->
     schedule_ping(),
     {reply, ping, State};
 
+websocket_info({player_killed}, State) ->
+    %% The player use-case layer is about to remove us from the
+    %% registry. Once that happens the game loop stops iterating us
+    %% and the client would never see another state_update — so it
+    %% would be stuck on its last known state with no death signal.
+    %% We send a `died` frame first so the client can transition to
+    %% game-over, then close the socket cleanly.
+    Payload = jsx:encode(#{type => <<"died">>}),
+    {reply, [{text, Payload}, {close, 4002, <<"died">>}], State};
+
 websocket_info(_Info, State) ->
     {ok, State}.
 

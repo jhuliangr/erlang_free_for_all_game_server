@@ -200,31 +200,39 @@ process_dots() ->
 
 -spec process_player_dots(player:player()) -> ok.
 process_player_dots(Player) ->
-    {Updated, DotDmg} = player:tick_dots(Player),
-    case DotDmg > 0.0 of
-        true ->
+    {Updated, Hits} = player:tick_dots(Player),
+    case Hits of
+        [] ->
+            ok;
+        _ ->
             PlayerId = player:id(Updated),
             player_registry:update_player(PlayerId, Updated),
-            %% Broadcast DoT damage as a combat event
-            Event = jsx:encode(#{
-                type       => <<"combat_event">>,
-                attackerId => <<"dot">>,
-                defenderId => PlayerId,
-                damage     => DotDmg
-            }),
-            web_broadcaster:broadcast(Event),
-            %% Handle DoT kill: record death, persist, then remove from
-            %% the registry and spatial index. Without this the corpse
-            %% stays visible and attackable, enabling repeated XP gain
-            %% on a player already at 0 HP.
+            %% One combat_event per DoT source so the client can
+            %% credit each tick to the player who originally applied
+            %% the DoT. `attackerId` stays as the <<"dot">> sentinel
+            %% (clients rely on it to style/skip these events);
+            %% `sourceId` carries the real applier.
+            lists:foreach(
+                fun({ApplierId, Dmg}) ->
+                    Event = jsx:encode(#{
+                        type       => <<"combat_event">>,
+                        attackerId => <<"dot">>,
+                        sourceId   => ApplierId,
+                        defenderId => PlayerId,
+                        damage     => Dmg
+                    }),
+                    web_broadcaster:broadcast(Event)
+                end,
+                Hits
+            ),
+            %% Handle DoT kill: record death, persist, then remove
+            %% from the registry and spatial index.
             case player:hp(Updated) =< +0.0 of
                 true ->
                     Dead = player:add_death(Updated),
                     player_registry:update_player(PlayerId, Dead),
-                    player_use_cases:leave_game(PlayerId);
+                    player_use_cases:kill_player(PlayerId);
                 false ->
                     ok
-            end;
-        false ->
-            ok
+            end
     end.
