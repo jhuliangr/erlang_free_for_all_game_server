@@ -31,6 +31,9 @@
 -define(FAR_RADIUS, 500.0).
 -define(MID_THROTTLE, 3).  %% mid-range players refreshed every 3rd tick
 -define(DOT_CHECK_INTERVAL, 1000).  %% Process DoTs every 1 second
+%% XP awarded to the applier of the killing DoT tick. Mirrors the
+%% constant in process_attack.erl so DoT and melee kills reward equally.
+-define(XP_PER_KILL, 50.0).
 -define(SERVER, ?MODULE).
 
 -record(state, {
@@ -198,6 +201,19 @@ process_dots() ->
     Players = player_registry:all_players(),
     lists:foreach(fun process_player_dots/1, Players).
 
+-spec award_dot_kill(binary()) -> ok.
+award_dot_kill(KillerId) ->
+    %% The applier may have left the game between casting the DoT and
+    %% it dealing the killing blow — in that case we simply skip the
+    %% credit (no error, no XP).
+    case player_registry:get_player(KillerId) of
+        {ok, Killer} ->
+            Rewarded = player:add_kill(player:gain_xp(Killer, ?XP_PER_KILL)),
+            player_registry:update_player(KillerId, Rewarded);
+        {error, not_found} ->
+            ok
+    end.
+
 -spec process_player_dots(player:player()) -> ok.
 process_player_dots(Player) ->
     {Updated, Hits} = player:tick_dots(Player),
@@ -225,10 +241,18 @@ process_player_dots(Player) ->
                 end,
                 Hits
             ),
-            %% Handle DoT kill: record death, persist, then remove
-            %% from the registry and spatial index.
+            %% Handle DoT kill: credit the most-recent applier with XP
+            %% and a kill (mirroring melee "killing blow" semantics),
+            %% record the death on the victim, then remove from the
+            %% registry. `Hits` is prepended in foldl, so its head is
+            %% the last DoT to tick this round — the closest analogue
+            %% we have to the killing blow.
             case player:hp(Updated) =< +0.0 of
                 true ->
+                    case Hits of
+                        [{KillerId, _Dmg} | _] -> award_dot_kill(KillerId);
+                        _                      -> ok
+                    end,
                     Dead = player:add_death(Updated),
                     player_registry:update_player(PlayerId, Dead),
                     player_use_cases:kill_player(PlayerId);
