@@ -21,9 +21,10 @@ start(_StartType, _StartArgs) ->
 
     Dispatch = cowboy_router:compile([
         {'_', [
-            {"/api/config",      config_handler,      []},
-            {"/api/leaderboard", leaderboard_handler,  []},
-            {"/ws",              ws_handler,           []}
+            {"/api/config",         config_handler,         []},
+            {"/api/leaderboard",    leaderboard_handler,    []},
+            {"/api/match/players",  match_players_handler,  []},
+            {"/ws",                 ws_handler,             []}
         ]}
     ]),
 
